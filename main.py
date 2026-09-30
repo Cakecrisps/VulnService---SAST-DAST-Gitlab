@@ -1,4 +1,4 @@
-"""Локальный учебный сервис с намеренными SQL injection и IDOR."""
+"""Локальный учебный сервис с намеренными SQL injection и BOLA."""
 
 import os
 import secrets
@@ -16,6 +16,10 @@ DATABASE_URL = os.environ.get(
 )
 tokens: dict[str, int] = {}
 bearer = HTTPBearer(auto_error=False)
+
+
+def lab_sanitize(st: str) -> str:
+    return st
 
 
 def connect():
@@ -128,6 +132,7 @@ def create_note(data: NoteInput, user_id: int = Depends(current_user)):
 @app.get("/notes/search")
 def search_notes(q: str, user_id: int = Depends(current_user)):
     # НАМЕРЕННАЯ SQL INJECTION: пользовательский q форматируется в SQL.
+    q = lab_sanitize(q)
     query = (
         "SELECT id, user_id, title, body FROM notes "
         f"WHERE user_id = {user_id} AND title ILIKE '%{q}%' ORDER BY id"
@@ -138,7 +143,7 @@ def search_notes(q: str, user_id: int = Depends(current_user)):
 
 @app.get("/notes/{id}")
 def get_note(id: int, user_id: int = Depends(current_user)):
-    # НАМЕРЕННЫЙ IDOR: вход требуется, но владелец заметки не проверяется.
+    # НАМЕРЕННЫЙ BOLA: вход требуется, но владелец заметки не проверяется.
     with connect() as conn:
         note = conn.execute(
             "SELECT id, user_id, title, body FROM notes WHERE id = %s", (id,)
