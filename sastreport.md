@@ -50,3 +50,19 @@ ERROR: Cannot install -r requirements.txt (line 1) and starlette==1.3.0 because 
 The conflict is caused by:
     The user requested starlette==1.3.0
     fastapi 0.115.12 depends on starlette<0.47.0 and >=0.40.0
+
+
+Сделано для следующих requriments:
+fastapi==0.115.12
+uvicorn==0.34.2
+psycopg[binary]==3.2.6
+
+
+пересбор с 
+
+fastapi==0.134.0
+uvicorn==0.34.2
+psycopg[binary]==3.2.6
+starlette==1.3.1
+
+пофиксил конфликт и убрал уязвимости в пакетах starlette
