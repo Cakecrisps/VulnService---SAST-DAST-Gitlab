@@ -1,0 +1,37 @@
+rules:
+  - id: lab-search-sql-injection
+    languages: [python]
+    severity: ERROR
+    message: Пользовательский q попадает в текст SQL-запроса.
+    mode: taint
+
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              def search_notes(...):
+                  ...
+          - pattern: q
+        exact: true
+
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.execute($SQL, ...)
+          - focus-metavariable: $SQL
+  - id: lab-lab-bola
+    languages: [python]
+    severity: WARNING
+    message: Проверь права пользователя
+    mode: taint
+    
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              def get_note(...):
+                ...
+          - pattern: id
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.execute($SQL,$VAR1,...)
+          - focus-metavariable: $VAR1
+
