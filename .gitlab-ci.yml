@@ -1,0 +1,12 @@
+stages:
+  - build
+  - test
+  - deploy
+
+build_job_1:
+  stage: build
+  image: alpine:3.20
+  script:
+    - echo "Run build"
+    - pwd
+    - ls -la
