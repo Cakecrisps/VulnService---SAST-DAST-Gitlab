@@ -1,12 +1,145 @@
 stages:
+  - sast
   - build
-  - test
-  - deploy
+  - dast
 
-build_job_1:
-  stage: build
-  image: alpine:3.20
+default:
+  tags:
+    - docker
+
+# Общие настройки заданий, которым нужен Docker daemon.
+.docker_job:
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    HEALTHCHECK_TCP_PORT: "2375"
+  before_script:
+    - docker info
+    - docker compose version
+
+sast:
+  stage: sast
+  image:
+    name: semgrep/semgrep:latest
+    entrypoint: [""]
   script:
-    - echo "Run build"
-    - pwd
-    - ls -la
+    - mkdir -p scan-results
+    - >
+      semgrep scan
+      --config p/python
+      --config test_ruels.yml
+      --metrics=off
+      --json
+      --output scan-results/semgrep.json
+      main.py
+  artifacts:
+    when: always
+    paths:
+      - scan-results/semgrep.json
+    expire_in: 7 days
+
+build:
+  extends: .docker_job
+  stage: build
+  script:
+    - docker build -t "vulnservice:$CI_COMMIT_SHA" .
+    - docker save -o vulnservice.tar "vulnservice:$CI_COMMIT_SHA"
+  artifacts:
+    paths:
+      - vulnservice.tar
+    expire_in: 1 day
+
+dast:
+  extends: .docker_job
+  stage: dast
+  dependencies:
+    - build
+  variables:
+    COMPOSE_PROJECT_NAME: vulnservice-ci
+  script:
+    - |
+      mkdir -p scan-results/zap
+
+      # Получаем именно образ, собранный заданием build.
+      docker load -i vulnservice.tar
+
+      # Добавляем образ к существующему Compose.
+      cat > compose.ci.yaml <<EOF
+      services:
+        app:
+          image: vulnservice:${CI_COMMIT_SHA}
+      EOF
+
+      docker compose \
+        -f compose.yaml -f compose.ci.yaml \
+        up -d --no-build --wait --wait-timeout 120
+
+      # Дополнительная сеть для связи ZAP с приложением.
+      docker network create scan-net
+      APP_ID=$(docker compose \
+        -f compose.yaml -f compose.ci.yaml ps -q app)
+      docker network connect --alias vuln-app scan-net "$APP_ID"
+
+      # Логинимся из контейнера приложения.
+      TOKEN=$(docker compose \
+        -f compose.yaml -f compose.ci.yaml \
+        exec -T app python -c '
+      import json
+      import urllib.request
+      request = urllib.request.Request(
+          "http://127.0.0.1:8000/login",
+          data=json.dumps({
+              "username": "bob",
+              "password": "bob"
+          }).encode(),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(request, timeout=10) as response:
+          print(json.load(response)["access_token"])
+      ')
+
+      # Контейнер сохраняем после сканирования, чтобы забрать отчёты.
+      docker create \
+        --name zap-scan \
+        --network scan-net \
+        -e ZAP_AUTH_HEADER=Authorization \
+        -e "ZAP_AUTH_HEADER_VALUE=Bearer $TOKEN" \
+        -e ZAP_AUTH_HEADER_SITE=vuln-app \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-api-scan.py \
+          -t http://vuln-app:8000/openapi.json \
+          -f openapi \
+          -r report.html \
+          -J report.json
+
+      ZAP_EXIT=0
+      docker start -a zap-scan || ZAP_EXIT=$?
+
+      docker cp zap-scan:/zap/wrk/report.html \
+        scan-results/zap/report.html
+      docker cp zap-scan:/zap/wrk/report.json \
+        scan-results/zap/report.json
+
+      # В учебном сервисе находки ожидаются.
+      # Ошибки самого сканера при этом не скрываем.
+      case "$ZAP_EXIT" in
+        0) echo "ZAP scan completed without alerts" ;;
+        1|2) echo "ZAP scan completed with findings" ;;
+        *) exit "$ZAP_EXIT" ;;
+      esac
+  after_script:
+    - mkdir -p scan-results
+    - docker compose -f compose.yaml -f compose.ci.yaml logs --no-color > scan-results/compose.log 2>&1 || true
+    - docker rm -f zap-scan || true
+    - docker compose -f compose.yaml -f compose.ci.yaml down -v || true
+    - docker network rm scan-net || true
+  artifacts:
+    when: always
+    paths:
+      - scan-results/
+    expire_in: 7 days
