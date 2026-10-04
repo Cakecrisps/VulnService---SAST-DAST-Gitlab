@@ -1,0 +1,9 @@
+# Дополнение для DAST: используем образ из build и общую сеть с ZAP.
+services:
+  app:
+    image: "vulnservice:${CI_COMMIT_SHA:?CI_COMMIT_SHA is required}"
+    ports: !reset []
+    networks:
+      default:
+        aliases:
+          - vuln-app

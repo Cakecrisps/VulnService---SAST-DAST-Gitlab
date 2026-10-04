@@ -60,22 +60,37 @@ dast:
   dependencies:
     - build
   variables:
-    COMPOSE_PROJECT_NAME: vulnservice-ci
+    COMPOSE_PROJECT_NAME: "vulnservice-ci-${CI_JOB_ID}"
+    ZAP_CONTAINER: "zap-scan-${CI_JOB_ID}"
+    ZAP_VOLUME: "zap-reports-${CI_JOB_ID}"
   script:
     - |
+      set -eu
+      mkdir -p scan-results/zap
+
+      # Образ из build загружаем в отдельный Docker daemon задания DAST.
+      docker load -i vulnservice.tar
+      docker compose -f compose.yaml -f compose.ci.yaml up \
+        -d --no-build --wait --wait-timeout 120
+
+      # Токены живут в памяти приложения: получаем новый после запуска.
+      TOKEN=$(docker compose -f compose.yaml -f compose.ci.yaml exec -T app \
+        python -c 'import json, urllib.request; request = urllib.request.Request("http://127.0.0.1:8000/login", data=json.dumps({"username": "alice", "password": "alice"}).encode(), headers={"Content-Type": "application/json"}); response = urllib.request.urlopen(request, timeout=10); print(json.load(response)["access_token"])')
+      test -n "$TOKEN"
+
       # Создаём volume внутри Docker daemon сервиса DinD.
-      docker volume create zap-reports
+      docker volume create "$ZAP_VOLUME"
 
       # Даём пользователю ZAP право записывать отчёты.
       docker run --rm \
-        -v zap-reports:/reports \
+        -v "$ZAP_VOLUME:/reports" \
         alpine:3.22 \
         chmod 777 /reports
 
       docker create \
-        --name zap-scan \
-        --network scan-net \
-        -v zap-reports:/zap/wrk:rw \
+        --name "$ZAP_CONTAINER" \
+        --network "${COMPOSE_PROJECT_NAME}_default" \
+        -v "$ZAP_VOLUME:/zap/wrk:rw" \
         -e ZAP_AUTH_HEADER=Authorization \
         -e "ZAP_AUTH_HEADER_VALUE=Bearer $TOKEN" \
         -e ZAP_AUTH_HEADER_SITE=vuln-app \
@@ -87,7 +102,7 @@ dast:
           -J report.json
 
       ZAP_EXIT=0
-      docker start -a zap-scan || ZAP_EXIT=$?
+      docker start -a "$ZAP_CONTAINER" || ZAP_EXIT=$?
 
       # При ошибке сканера останавливаемся до копирования отчётов.
       case "$ZAP_EXIT" in
@@ -95,9 +110,9 @@ dast:
         *) exit "$ZAP_EXIT" ;;
       esac
 
-      docker cp zap-scan:/zap/wrk/report.html \
+      docker cp "$ZAP_CONTAINER:/zap/wrk/report.html" \
         scan-results/zap/report.html
-      docker cp zap-scan:/zap/wrk/report.json \
+      docker cp "$ZAP_CONTAINER:/zap/wrk/report.json" \
         scan-results/zap/report.json
 
       echo "ZAP completed with exit code $ZAP_EXIT"
@@ -109,9 +124,9 @@ dast:
   after_script:
     - mkdir -p scan-results
     - docker compose -f compose.yaml -f compose.ci.yaml logs --no-color > scan-results/compose.log 2>&1 || true
-    - docker rm -f zap-scan || true
+    - docker rm -f "$ZAP_CONTAINER" || true
     - docker compose -f compose.yaml -f compose.ci.yaml down -v || true
-    - docker network rm scan-net || true
+    - docker volume rm "$ZAP_VOLUME" || true
   artifacts:
     when: always
     paths:
