@@ -56,6 +56,8 @@ def trivy_findings(report):
     # Trivy omits Results and Vulnerabilities when their arrays are empty.
     for result in list_value(report.get("Results", []), "Results", nullable=True):
         result = object_value(result, "Results[]")
+        if result.get("Class") == "os-pkgs":
+            continue
         for vulnerability in list_value(
             result.get("Vulnerabilities", []), "Vulnerabilities", nullable=True
         ):

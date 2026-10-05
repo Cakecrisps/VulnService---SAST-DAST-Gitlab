@@ -70,6 +70,27 @@ class SecurityGateTests(unittest.TestCase):
                 summary = self.run_gate(1)
                 self.assertEqual(summary["reports"]["trivy"]["counts"], {severity: 1})
 
+    def test_trivy_os_packages_do_not_block_or_count(self):
+        results = [self.trivy_result(level) for level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")]
+        for result in results:
+            result["Class"] = "os-pkgs"
+        self.reports["trivy"]["Results"] = results
+        summary = self.run_gate(0)
+        self.assertEqual(summary["reports"]["trivy"]["counts"], {})
+        self.assertEqual(summary["reports"]["trivy"]["blocking_findings"], [])
+
+    def test_trivy_language_packages_still_block_and_count(self):
+        os_result = self.trivy_result("CRITICAL")
+        os_result["Class"] = "os-pkgs"
+        language_results = [self.trivy_result(level) for level in ("HIGH", "MEDIUM")]
+        for result in language_results:
+            result["Class"] = "lang-pkgs"
+        self.reports["trivy"]["Results"] = [os_result, *language_results]
+        summary = self.run_gate(1)
+        self.assertEqual(summary["reports"]["trivy"]["counts"], {"HIGH": 1, "MEDIUM": 1})
+        self.assertEqual(len(summary["reports"]["trivy"]["blocking_findings"]), 1)
+        self.assertEqual(summary["reports"]["trivy"]["blocking_findings"][0]["severity"], "HIGH")
+
     def test_zap_high_blocks_even_with_low_confidence(self):
         for code in ("3", 3):
             with self.subTest(code=code):
