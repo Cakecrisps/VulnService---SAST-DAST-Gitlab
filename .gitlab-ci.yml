@@ -32,6 +32,7 @@ sast:
     - >
       semgrep scan
       --config p/python
+      --config p/owasp-top-ten
       --config test_ruels.yml
       --metrics=off
       --json
