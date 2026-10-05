@@ -133,6 +133,7 @@ dast:
         --name "$ZAP_CONTAINER" \
         --network "${COMPOSE_PROJECT_NAME}_default" \
         -v "$ZAP_VOLUME:/zap/wrk:rw" \
+        -e PYTHONUNBUFFERED=1 \
         -e ZAP_AUTH_HEADER=Authorization \
         -e "ZAP_AUTH_HEADER_VALUE=Bearer $TOKEN" \
         -e ZAP_AUTH_HEADER_SITE=vuln-app \
@@ -140,16 +141,23 @@ dast:
         zap-api-scan.py \
           -t http://vuln-app:8000/openapi.json \
           -f openapi \
+          -d \
+          -T 5 \
           -r report.html \
           -J report.json
 
+      echo "Starting ZAP: progress is logged below; scan timeout is 20 minutes"
       ZAP_EXIT=0
-      docker start -a "$ZAP_CONTAINER" || ZAP_EXIT=$?
+      # -T ограничивает запуск ZAP и passive scan; всё ожидание ограничиваем отдельно.
+      timeout -k 30s 20m docker start -a "$ZAP_CONTAINER" || ZAP_EXIT=$?
 
       # При ошибке сканера останавливаемся до копирования отчётов.
       case "$ZAP_EXIT" in
         0|1|2) ;;
-        *) exit "$ZAP_EXIT" ;;
+        *)
+          echo "ZAP failed or timed out (exit $ZAP_EXIT); see scan-results/zap logs"
+          exit "$ZAP_EXIT"
+          ;;
       esac
 
       docker cp "$ZAP_CONTAINER:/zap/wrk/report.html" \
@@ -164,8 +172,11 @@ dast:
         *) exit "$ZAP_EXIT" ;;
       esac
   after_script:
-    - mkdir -p scan-results
+    - mkdir -p scan-results/zap
     - docker compose -f compose.yaml -f compose.ci.yaml logs --no-color > scan-results/compose.log 2>&1 || true
+    - docker logs --timestamps "$ZAP_CONTAINER" > scan-results/zap/scanner.log 2>&1 || true
+    - docker inspect --format '{{json .State}}' "$ZAP_CONTAINER" > scan-results/zap/container-state.json 2>&1 || true
+    - docker cp "$ZAP_CONTAINER:/zap/zap.out" scan-results/zap/zap.out || true
     - docker rm -f "$ZAP_CONTAINER" || true
     - docker compose -f compose.yaml -f compose.ci.yaml down -v || true
     - docker volume rm "$ZAP_VOLUME" || true
