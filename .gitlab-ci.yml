@@ -1,7 +1,12 @@
 stages:
   - sast
   - build
+  - container_scan
   - dast
+  - publish
+
+variables:
+  DOCKERHUB_IMAGE: kuchenchips/vulnservice
 
 default:
   tags:
@@ -54,6 +59,42 @@ build:
     paths:
       - vulnservice.tar
     expire_in: 1 day
+
+trivy:
+  stage: container_scan
+  image:
+    name: aquasec/trivy:0.75.0
+    entrypoint: [""]
+  dependencies:
+    - build
+  cache:
+    key: trivy-0.75
+    paths:
+      - .trivycache/
+  script:
+    - mkdir -p scan-results/trivy
+    # В учебном образе уязвимости ожидаемы; ошибки самого сканера остаются фатальными.
+    - >
+      trivy image
+      --cache-dir .trivycache
+      --no-progress
+      --timeout 10m
+      --scanners vuln
+      --exit-code 0
+      --input vulnservice.tar
+      --format json
+      --output scan-results/trivy/report.json
+    - >
+      trivy convert
+      --format table
+      --output scan-results/trivy/report.txt
+      scan-results/trivy/report.json
+    - cat scan-results/trivy/report.txt
+  artifacts:
+    when: always
+    paths:
+      - scan-results/trivy/
+    expire_in: 7 days
 
 dast:
   extends: .docker_job
@@ -133,3 +174,30 @@ dast:
     paths:
       - scan-results/
     expire_in: 7 days
+
+publish:
+  extends: .docker_job
+  stage: publish
+  dependencies:
+    - build
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - |
+      set -eu
+      : "${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME in GitLab CI/CD variables}"
+      : "${DOCKERHUB_TOKEN:?Set DOCKERHUB_TOKEN in GitLab CI/CD variables}"
+
+      # Временный каталог авторизации удаляется и при ошибке пуша.
+      DOCKER_CONFIG=$(mktemp -d)
+      export DOCKER_CONFIG
+      trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+
+      docker load -i vulnservice.tar
+      printf '%s' "$DOCKERHUB_TOKEN" | docker login docker.io \
+        --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      docker tag "vulnservice:$CI_COMMIT_SHA" "$DOCKERHUB_IMAGE:$CI_COMMIT_SHA"
+      docker push "$DOCKERHUB_IMAGE:$CI_COMMIT_SHA"
+      docker tag "vulnservice:$CI_COMMIT_SHA" "$DOCKERHUB_IMAGE:latest"
+      docker push "$DOCKERHUB_IMAGE:latest"

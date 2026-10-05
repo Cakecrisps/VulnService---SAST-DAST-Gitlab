@@ -4,6 +4,28 @@ FastAPI и PostgreSQL, только вымышленные данные и те�
 В сервисе намеренно оставлены SQL injection, IDOR и открытое хранение паролей.
 Стенд предназначен для локальной практики.
 
+## GitLab CI/CD
+
+Пайплайн выполняет Semgrep, сборку образа, Trivy, ZAP и публикацию в Docker Hub.
+Trivy проверяет пакеты в архиве `vulnservice.tar` из задания `build` без Docker daemon.
+Отчёты `scan-results/trivy/report.json` и `scan-results/trivy/report.txt`
+сохраняются в артефактах задания `trivy` на 7 дней. Отчёты ZAP и логи стенда
+доступны в артефактах `dast` на тот же срок.
+
+Находки Trivy и ZAP не останавливают пайплайн: сервис намеренно уязвимый.
+Ошибки запуска, сканирования и сохранения отчётов останавливают публикацию.
+
+В GitLab → **Settings → CI/CD → Variables** добавьте:
+
+- `DOCKERHUB_USERNAME` — `kuchenchips` либо пользователь с доступом к репозиторию.
+- `DOCKERHUB_TOKEN` — Docker Hub access token с правом записи; включите **Masked**.
+
+Переменные должны быть доступны пайплайну основной ветки. Если включён
+**Protected**, основная ветка также должна быть защищённой.
+Задание `publish` запускается после успешных проверок только в основной ветке
+(`CI_DEFAULT_BRANCH`) и отправляет тот же образ в `kuchenchips/vulnservice`
+с тегами полного SHA коммита и `latest`.
+
 ## Запуск
 
 Нужны Docker и плагин Docker Compose:
