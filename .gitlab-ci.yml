@@ -3,6 +3,7 @@ stages:
   - build
   - container_scan
   - dast
+  - security_gate
   - publish
 
 variables:
@@ -73,7 +74,7 @@ trivy:
       - .trivycache/
   script:
     - mkdir -p scan-results/trivy
-    # В учебном образе уязвимости ожидаемы; ошибки самого сканера остаются фатальными.
+    # Сначала сохраняем полный отчёт; пороги проверяет security_gate.
     - >
       trivy image
       --cache-dir .trivycache
@@ -184,6 +185,26 @@ dast:
     when: always
     paths:
       - scan-results/
+    expire_in: 7 days
+
+security_gate:
+  stage: security_gate
+  image: python:3.12-alpine
+  dependencies:
+    - sast
+    - trivy
+    - dast
+  script:
+    - >
+      python scripts/check_scan_reports.py
+      --semgrep scan-results/semgrep.json
+      --trivy scan-results/trivy/report.json
+      --zap scan-results/zap/report.json
+      --summary scan-results/security-summary.json
+  artifacts:
+    when: always
+    paths:
+      - scan-results/security-summary.json
     expire_in: 7 days
 
 publish:
